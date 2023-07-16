@@ -63,65 +63,43 @@ class MongooseDbAdapter {
 	 *
 	 * @memberof MongooseDbAdapter
 	 */
-	connect() {
-		let conn;
-
-		if (this.model) {
-
-			/* istanbul ignore next */
-			if (mongoose.connection.readyState == 1) {
-				this.db = mongoose.connection;
-				return Promise.resolve();
-			} else if (mongoose.connection.readyState == 2) {
-				conn = Promise.resolve(mongoose.connection);
-			} else {
-				conn = mongoose.connect(this.uri, this.opts);
+	async connect() {
+		try {
+			if (this.model) {
+				if (mongoose.connection.readyState === 2) {
+					await mongoose.connection.asPromise();
+				} else if (mongoose.connection.readyState !== 1) {
+					await mongoose.connect(this.uri, this.opts);
+				}
+			} else if (this.schema) {
+				await mongoose.createConnection(this.uri, this.opts).asPromise();
+				this.model = mongoose.connection.model(this.modelName, this.schema);
 			}
 
-		} else if (this.schema) {
-			conn = new Promise(resolve =>{
-				const 	c = mongoose.createConnection(this.uri, this.opts);
-				this.model = c.model(this.modelName, this.schema);
-				resolve(c);
-			});
+			this.conn = mongoose.connection;
+		} catch (error) {
+			this.service.logger.error(error);
 		}
 
+		if (this.conn.readyState !== this.conn.states.connected) {
+			throw new MoleculerError(
+				`MongoDB connection failed . Status is "${
+					this.conn.states[this.conn._readyState]
+				}"`
+			);
+		}
 
-		return conn.then(_result => {
-			const result = _result || conn;
-			this.conn =  conn;
+		this.db = this.conn.db;
 
-			if (mongoose.connection.readyState != mongoose.connection.states.connected) {
-				throw new MoleculerError(
-					`MongoDB connection failed . Status is "${
-						mongoose.connection.states[mongoose.connection._readyState]
-					}"`
-				);
-			}
+		if (!this.db) {
+			throw new MoleculerError("MongoDB connection failed to get DB object");
+		}
 
-			if(this.model)
-				this.model = _result.model(this.model["modelName"],this.model["schema"]);
+		this.service.logger.info("MongoDB adapter has connected successfully.");
 
-
-			if (result.connection)
-				this.db = result.connection.db;
-			else
-				this.db = result.db;
-
-			if (!this.db) {
-				throw new MoleculerError("MongoDB connection failed to get DB object");
-			}
-
-			this.service.logger.info("MongoDB adapter has connected successfully.");
-
-
-			/* istanbul ignore next */
-			result.connection.on("disconnected", () => this.service.logger.warn("Mongoose adapter has disconnected."));
-			result.connection.on("error", err => this.service.logger.error("MongoDB error.", err));
-			result.connection.on("reconnect", () => this.service.logger.info("Mongoose adapter has reconnected."));
-
-		});
-
+		this.conn.on("disconnected", () => this.service.logger.warn("Mongoose adapter has disconnected."));
+		this.conn.on("error", err => this.service.logger.error("MongoDB error.", err));
+		this.conn.on("reconnect", () => this.service.logger.info("Mongoose adapter has reconnected."));
 	}
 
 	/**
